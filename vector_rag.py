@@ -51,7 +51,7 @@ class VectorRAGApplication:
             
             self.search_client = SearchClient(
                 endpoint=endpoint,
-                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME_SIMPLE"),
+                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR"),
                 credential=self.search_credential
             )
             
@@ -68,7 +68,7 @@ class VectorRAGApplication:
     def create_search_index(self):
         """Create search index with vector search capability using a SearchIndex model"""
         try:
-            index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_SIMPLE")
+            index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR")
             # Check if the index already exists
             try:
                 existing_index = self.index_client.get_index(index_name)
