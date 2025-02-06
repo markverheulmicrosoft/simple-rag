@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import List
 from dotenv import load_dotenv
 from azure.search.documents import SearchClient
@@ -6,17 +7,18 @@ from azure.core.credentials import AzureKeyCredential
 from openai import AzureOpenAI
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.exceptions import HttpResponseError
-from azure.identity import DefaultAzureCredential
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 class VectorRAGApplication:
     def __init__(self):
         try:
             # Initialize Azure Search clients
-            self.search_credential = DefaultAzureCredential()
-            print(f"Using credential: {self.search_credential}")
+            self.search_credential = AzureKeyCredential(os.getenv("AZURE_SEARCH_ADMIN_KEY"))
             
             endpoint = os.getenv("AZURE_SEARCH_SERVICE_ENDPOINT")
             if not endpoint.endswith('/'):
@@ -26,7 +28,6 @@ class VectorRAGApplication:
                 endpoint=endpoint,
                 credential=self.search_credential
             )
-            print(f"Using endpoint: {os.getenv('AZURE_SEARCH_SERVICE_ENDPOINT')}")
             
             # Initialize Azure OpenAI client
             self.openai_client = AzureOpenAI(
@@ -40,7 +41,7 @@ class VectorRAGApplication:
             
             self.search_client = SearchClient(
                 endpoint=endpoint,
-                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME"),
+                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME_SIMPLE"),
                 credential=self.search_credential
             )
         except Exception as e:
@@ -58,19 +59,15 @@ class VectorRAGApplication:
     def create_search_index(self):
         """Create search index with vector search capability"""
         try:
-            index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR")
-            print(f"Using index name: {index_name}")
+            index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_SIMPLE")
             
             # Check if index exists
             try:
                 existing_index = self.index_client.get_index(index_name)
                 print(f"Index {index_name} already exists")
                 return
-            except HttpResponseError as e:
-                if e.status_code == 404:
-                    print(f"Creating new index {index_name}")
-                else:
-                    raise
+            except Exception:
+                print(f"Creating new index {index_name}")
 
             # Create the raw index definition
             index_definition = {
@@ -118,7 +115,7 @@ class VectorRAGApplication:
             }
 
             # Create the index using the raw definition
-            self.index_client.create_index(index_definition)
+            self.index_client._client.indexes.create(index_definition)
             print(f"Created index {index_name} with vector search")
         except HttpResponseError as e:
             if e.status_code == 403:
@@ -136,11 +133,13 @@ class VectorRAGApplication:
             for i, para in enumerate(paragraphs):
                 if para.strip():
                     content = para.strip()
+                    embedding = self.get_embeddings(content)
+                    logging.info(f"Vectorizing content from {file_path}: {content[:100]}... -> {embedding[:5]}...")
                     chunks.append({
                         "id": str(i),
                         "content": content,
                         "file_name": os.path.basename(file_path),
-                        "content_vector": self.get_embeddings(content)
+                        "content_vector": embedding
                     })
         return chunks
 
@@ -148,16 +147,17 @@ class VectorRAGApplication:
         """Index documents in Azure Search"""
         try:
             self.search_client.upload_documents(documents=documents)
-            print(f"Indexed {len(documents)} documents successfully")
+            logging.info(f"Indexed {len(documents)} documents successfully")
         except Exception as e:
-            print(f"Error indexing documents: {e}")
+            logging.error(f"Error indexing documents: {e}")
 
     def search_documents(self, query: str, top: int = 3) -> List[dict]:
         """Search for relevant documents using hybrid search"""
         try:
             # Get query embedding
             query_vector = self.get_embeddings(query)
-            
+            logging.info(f"Query vector: {query_vector[:5]}...")
+
             # Perform hybrid search (combines vector and keyword search)
             results = self.search_client.search(
                 search_text=query,
@@ -171,7 +171,7 @@ class VectorRAGApplication:
             )
             return [dict(result) for result in results]
         except Exception as e:
-            print(f"Error searching documents: {e}")
+            logging.error(f"Error searching documents: {e}")
             return []
 
     def generate_response(self, query: str, context: List[dict]) -> str:
@@ -192,10 +192,24 @@ class VectorRAGApplication:
 
         return response.choices[0].message.content
 
+    def get_existing_documents(self) -> set:
+        """Get a set of file names that have already been indexed"""
+        try:
+            results = self.search_client.search(search_text="*", select=["file_name"], top=1000)
+            existing_files = {result["file_name"] for result in results}
+            logging.info(f"Existing documents in the index: {existing_files}")
+            return existing_files
+        except Exception as e:
+            logging.error(f"Error retrieving existing documents: {e}")
+            return set()
+
 def main():
     # Initialize RAG application
     rag_app = VectorRAGApplication()
 
+    # Get existing documents
+    existing_documents = rag_app.get_existing_documents()
+    
     # Load and index documents
     documents = []
     data_folder = "Data"
@@ -204,8 +218,16 @@ def main():
     print(f"Found {len(data_files)} documents to process: {[os.path.basename(f) for f in data_files]}")
     
     for file_path in data_files:
-        documents.extend(rag_app.load_document(file_path))
-    rag_app.index_documents(documents)
+        file_name = os.path.basename(file_path)
+        if file_name not in existing_documents:
+            documents.extend(rag_app.load_document(file_path))
+        else:
+            logging.info(f"Skipping already processed file: {file_name}")
+    
+    if documents:
+        rag_app.index_documents(documents)
+    else:
+        logging.info("No new documents to index")
 
     # Example queries to demonstrate semantic search
     queries = [
