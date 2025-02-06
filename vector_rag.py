@@ -6,7 +6,7 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.exceptions import HttpResponseError
-import openai
+from openai import AzureOpenAI  # new client-based import
 
 # Load environment variables
 load_dotenv()
@@ -14,13 +14,7 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# --- Azure OpenAI configuration ---
-# Instead of using a separate AzureOpenAI class, we configure the openai module for Azure OpenAI.
-openai.api_type = "azure"
-openai.api_base = os.getenv("AZURE_OPENAI_ENDPOINT")  # e.g. "https://<your-resource>.openai.azure.com/"
-openai.api_version = "2024-02-01"  # Adjust to your chosen stable API version
-openai.api_key = os.getenv("AZURE_OPENAI_API_KEY")
-# For embedding and chat completions, use the appropriate deployment names
+# Deployment names from environment variables
 AZURE_OPENAI_EMB_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMB_DEPLOYMENT")  # e.g. "text-embedding-ada-002"
 AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")  # e.g. "gpt-35-turbo"
 
@@ -31,7 +25,7 @@ class VectorRAGApplication:
             self.search_credential = AzureKeyCredential(os.getenv("AZURE_SEARCH_ADMIN_KEY"))
             
             endpoint = os.getenv("AZURE_SEARCH_SERVICE_ENDPOINT")
-            # Ensure endpoint does not end with a slash (the SDK expects no trailing slash)
+            # Ensure endpoint does not end with a slash
             if endpoint.endswith('/'):
                 endpoint = endpoint[:-1]
                 
@@ -47,6 +41,13 @@ class VectorRAGApplication:
                 endpoint=endpoint,
                 index_name=os.getenv("AZURE_SEARCH_INDEX_NAME_SIMPLE"),
                 credential=self.search_credential
+            )
+            
+            # Instantiate the AzureOpenAI client (new client-based interface)
+            self.ai_client = AzureOpenAI(
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                api_version="2024-02-01"  # Adjust if needed
             )
         except Exception as e:
             print(f"Error during initialization: {str(e)}")
@@ -68,9 +69,7 @@ class VectorRAGApplication:
                 else:
                     raise
 
-            # Updated index definition:
-            # - Change "vectorSearchConfiguration" to "vectorSearchProfile" for the vector field.
-            # - The vector field remains defined as a collection of Edm.Single with dimensions.
+            # Updated index definition using "vectorSearchProfile" for the vector field
             index_definition = {
                 "name": index_name,
                 "fields": [
@@ -155,12 +154,11 @@ class VectorRAGApplication:
     def search_documents(self, query: str, top: int = 3) -> List[dict]:
         """Search for relevant documents using hybrid search that includes vector similarity"""
         try:
-            # Get query embedding using the updated method
+            # Get query embedding using the new client
             query_vector = self.get_embeddings(query)
             logging.info(f"Query vector: {query_vector[:5]}...")
 
-            # Perform hybrid search (combines vector and keyword search)
-            # Updated: use the "vector" parameter (a dictionary) instead of "vector_queries".
+            # Perform hybrid search using the updated vector parameter
             results = self.search_client.search(
                 search_text=query,
                 select=["content", "file_name"],
@@ -168,7 +166,7 @@ class VectorRAGApplication:
                     "value": query_vector,
                     "fields": "content_vector",
                     "k": top,
-                    "similarityFunction": "cosine"  # explicit similarity function
+                    "similarityFunction": "cosine"
                 },
                 top=top
             )
@@ -189,27 +187,27 @@ class VectorRAGApplication:
             return set()
 
     def get_embeddings(self, text: str) -> List[float]:
-        """Get embeddings for a given text using Azure OpenAI via the OpenAI Python SDK"""
-        # Updated: use openai.Embedding.create with engine parameter (deployment name) 
-        response = openai.Embedding.create(
-            engine=AZURE_OPENAI_EMB_DEPLOYMENT,
-            input=[text]
+        """Get embeddings for a given text using the new AzureOpenAI client"""
+        response = self.ai_client.embeddings.create(
+            input=[text],
+            model=AZURE_OPENAI_EMB_DEPLOYMENT
         )
-        return response['data'][0]['embedding']
+        # Access embedding from the Pydantic response object
+        return response.data[0].embedding
 
     def generate_response(self, query: str, documents: List[dict]) -> str:
-        """Generate a response based on the query and retrieved documents"""
+        """Generate a response based on the query and retrieved documents using the new AzureOpenAI client"""
         context = "\n".join([doc["content"] for doc in documents])
-        response = openai.ChatCompletion.create(
-            engine=AZURE_OPENAI_DEPLOYMENT,
+        response = self.ai_client.chat.completions.create(
+            model=AZURE_OPENAI_DEPLOYMENT,
             messages=[
                 {"role": "system", "content": "You are an AI assistant."},
                 {"role": "user", "content": query},
                 {"role": "assistant", "content": context}
             ]
         )
-        # The updated v1 API returns message content in a dictionary
-        return response['choices'][0]['message']['content']
+        # Access message content via dot notation
+        return response.choices[0].message.content
 
 def main():
     # Initialize RAG application
