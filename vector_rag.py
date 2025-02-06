@@ -6,8 +6,11 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.exceptions import HttpResponseError
-from openai import AzureOpenAI  # new client-based interface
-
+from openai import AzureOpenAI  # new client-based Azure OpenAI interface
+from azure.search.documents.indexes.models import (
+    SearchIndex, SimpleField, SearchableField, VectorField,
+    VectorSearch, HnswVectorSearchAlgorithmConfiguration
+)
 # Load environment variables
 load_dotenv()
 
@@ -34,7 +37,7 @@ class VectorRAGApplication:
                 credential=self.search_credential
             )
             
-            # Create index if it doesn't exist
+            # Create index if it doesn't exist (using the new SearchIndex object)
             self.create_search_index()
             
             self.search_client = SearchClient(
@@ -54,11 +57,11 @@ class VectorRAGApplication:
             raise
 
     def create_search_index(self):
-        """Create search index with vector search capability"""
+        """Create search index with vector search capability using a SearchIndex model"""
         try:
             index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR")
             
-            # Check if index exists
+            # Check if the index already exists
             try:
                 existing_index = self.index_client.get_index(index_name)
                 print(f"Index {index_name} already exists")
@@ -69,53 +72,43 @@ class VectorRAGApplication:
                 else:
                     raise
 
-            # Updated index definition using "vectorSearchProfile" for the vector field
-            index_definition = {
-                "name": index_name,
-                "fields": [
-                    {
-                        "name": "id",
-                        "type": "Edm.String",
-                        "key": True,
-                        "filterable": True
-                    },
-                    {
-                        "name": "content",
-                        "type": "Edm.String",
-                        "searchable": True,
-                        "analyzer": "en.microsoft"
-                    },
-                    {
-                        "name": "file_name",
-                        "type": "Edm.String",
-                        "filterable": True
-                    },
-                    {
-                        "name": "content_vector",
-                        "type": "Collection(Edm.Single)",
-                        "searchable": True,
-                        "dimensions": 1536,
-                        "vectorSearchProfile": "default"  # updated property name
-                    }
-                ],
-                "vectorSearch": {
-                    "algorithmConfigurations": [
-                        {
-                            "name": "default",
-                            "kind": "hnsw",
-                            "parameters": {
-                                "m": 4,
-                                "efConstruction": 400,
-                                "efSearch": 500,
-                                "metric": "cosine"
-                            }
-                        }
-                    ]
-                }
-            }
+            # Define the fields using the model classes
+            fields = [
+                SimpleField(name="id", type="Edm.String", key=True, filterable=True),
+                SearchableField(name="content", type="Edm.String", analyzer_name="en.microsoft"),
+                SimpleField(name="file_name", type="Edm.String", filterable=True),
+                SearchableField(
+                    name="content_vector",
+                    type="Collection(Edm.Single)",
+                    # Use the VectorField to define vector-specific properties
+                    vector_field=VectorField(dimensions=1536, vector_search_profile="default")
+                )
+            ]
 
-            # Create the index using the raw definition
-            self.index_client.create_index(index_definition)
+            # Define the vector search configuration using the model classes
+            vector_search_config = VectorSearch(
+                algorithm_configurations=[
+                    HnswVectorSearchAlgorithmConfiguration(
+                        name="default",
+                        parameters={
+                            "m": 4,
+                            "efConstruction": 400,
+                            "efSearch": 500,
+                            "metric": "cosine"
+                        }
+                    )
+                ]
+            )
+
+            # Create a SearchIndex object with the fields and vector search settings
+            index_obj = SearchIndex(
+                name=index_name,
+                fields=fields,
+                vector_search=vector_search_config
+            )
+
+            # Create the index
+            self.index_client.create_index(index_obj)
             print(f"Created index {index_name} with vector search")
         except HttpResponseError as e:
             if e.status_code == 403:
@@ -125,7 +118,9 @@ class VectorRAGApplication:
             raise
 
     def load_document(self, file_path: str) -> List[dict]:
-        """Load and chunk document into sections with embeddings"""
+        """Load and chunk document into sections with embeddings.
+           Each document chunk gets a unique ID based on the file name and paragraph index.
+        """
         chunks = []
         with open(file_path, 'r', encoding='utf-8') as file:
             text = file.read()
@@ -136,13 +131,13 @@ class VectorRAGApplication:
                     embedding = self.get_embeddings(content)
                     logging.info(f"Vectorizing content from {file_path}: {content[:100]}... -> {embedding[:5]}...")
                     chunks.append({
-                        "id": f"{os.path.basename(file_path)}_{i}",  # Composite unique ID
+                        # Use a composite key so that documents from different files don't collide.
+                        "id": f"{os.path.basename(file_path)}_{i}",
                         "content": content,
                         "file_name": os.path.basename(file_path),
                         "content_vector": embedding
                     })
         return chunks
-
 
     def index_documents(self, documents: List[dict]):
         """Index documents in Azure Search"""
@@ -153,13 +148,13 @@ class VectorRAGApplication:
             logging.error(f"Error indexing documents: {e}")
 
     def search_documents(self, query: str, top: int = 3) -> List[dict]:
-        """Search for relevant documents using hybrid search that includes vector similarity"""
+        """Search for relevant documents using hybrid search that includes vector similarity.
+           Uses the 'vector_queries' parameter.
+        """
         try:
-            # Get query embedding using the new client
             query_vector = self.get_embeddings(query)
             logging.info(f"Query vector: {query_vector[:5]}...")
 
-            # Perform hybrid search using the correct parameter "vector_queries"
             results = self.search_client.search(
                 search_text=query,
                 select=["content", "file_name"],
@@ -188,7 +183,7 @@ class VectorRAGApplication:
             return set()
 
     def get_embeddings(self, text: str) -> List[float]:
-        """Get embeddings for a given text using the new AzureOpenAI client"""
+        """Get embeddings for a given text using the AzureOpenAI client"""
         response = self.ai_client.embeddings.create(
             input=[text],
             model=AZURE_OPENAI_EMB_DEPLOYMENT
@@ -196,7 +191,7 @@ class VectorRAGApplication:
         return response.data[0].embedding
 
     def generate_response(self, query: str, documents: List[dict]) -> str:
-        """Generate a response based on the query and retrieved documents using the new AzureOpenAI client"""
+        """Generate a response based on the query and retrieved documents using the AzureOpenAI client"""
         context = "\n".join([doc["content"] for doc in documents])
         response = self.ai_client.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT,
@@ -212,10 +207,10 @@ def main():
     # Initialize RAG application
     rag_app = VectorRAGApplication()
 
-    # Get existing documents to avoid re-indexing
+    # Retrieve existing documents to avoid re-indexing
     existing_documents = rag_app.get_existing_documents()
     
-    # Load and index documents
+    # Load and index documents from the Data folder
     documents = []
     data_folder = "Data"
     data_files = [os.path.join(data_folder, f) for f in os.listdir(data_folder) if f.endswith('.txt')]
@@ -233,7 +228,7 @@ def main():
     else:
         logging.info("No new documents to index")
 
-    # Prompt user for queries
+    # Loop for user queries
     while True:
         query = input("\nEnter your query (or type 'exit' to quit): ")
         if query.lower() == 'exit':
