@@ -9,8 +9,7 @@ from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 from openai import AzureOpenAI
 
-# Additional imports for building the index with vector fields and profiles,
-# and for constructing a vector query.
+# Additional imports for building the index with vector fields and profiles
 from azure.search.documents.indexes.models import (
     SearchIndex,
     SimpleField,
@@ -22,7 +21,7 @@ from azure.search.documents.indexes.models import (
     HnswParameters,
     VectorSearchProfile
 )
-from azure.search.documents.models import VectorizedQuery  # Use this to build your query
+from azure.search.documents.models import VectorizedQuery  # for query construction
 
 # Load environment variables
 load_dotenv()
@@ -88,17 +87,18 @@ class VectorRAGApplication:
                 SimpleField(name="id", type=SearchFieldDataType.String, key=True, filterable=True),
                 SearchableField(name="content", type=SearchFieldDataType.String, analyzer_name="en.microsoft"),
                 SimpleField(name="file_name", type=SearchFieldDataType.String, filterable=True),
-                # Define the vector field with the necessary properties.
+                # Define the vector field with retrievable=True so it can be returned in queries.
                 SearchField(
                     name="content_vector",
                     type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
                     searchable=True,
+                    retrievable=True,
                     vector_search_dimensions=1536,
                     vector_search_profile_name="default"  # This must match a profile in vector_search.profiles
                 )
             ]
             
-            # Define the vector search configuration with an algorithm configuration and a profile.
+            # Define the vector search configuration with both an algorithm configuration and a profile.
             vector_search_config = VectorSearch(
                 algorithms=[
                     HnswAlgorithmConfiguration(
@@ -185,7 +185,7 @@ class VectorRAGApplication:
             )
             results = self.search_client.search(
                 search_text=query,
-                select=["content", "file_name"],
+                select=["content", "file_name", "content_vector"],
                 vector_queries=[vector_query],
                 top=top
             )
