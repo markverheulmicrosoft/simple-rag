@@ -4,7 +4,6 @@ from typing import List
 from dotenv import load_dotenv
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
-from openai import AzureOpenAI
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.exceptions import HttpResponseError
 import openai
@@ -15,6 +14,16 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
+# --- Azure OpenAI configuration ---
+# Instead of using a separate AzureOpenAI class, we configure the openai module for Azure OpenAI.
+openai.api_type = "azure"
+openai.api_base = os.getenv("AZURE_OPENAI_ENDPOINT")  # e.g. "https://<your-resource>.openai.azure.com/"
+openai.api_version = "2024-02-01"  # Adjust to your chosen stable API version
+openai.api_key = os.getenv("AZURE_OPENAI_API_KEY")
+# For embedding and chat completions, use the appropriate deployment names
+AZURE_OPENAI_EMB_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMB_DEPLOYMENT")  # e.g. "text-embedding-ada-002"
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")  # e.g. "gpt-35-turbo"
+
 class VectorRAGApplication:
     def __init__(self):
         try:
@@ -22,19 +31,13 @@ class VectorRAGApplication:
             self.search_credential = AzureKeyCredential(os.getenv("AZURE_SEARCH_ADMIN_KEY"))
             
             endpoint = os.getenv("AZURE_SEARCH_SERVICE_ENDPOINT")
-            if not endpoint.endswith('/'):
-                endpoint += '/'
+            # Ensure endpoint does not end with a slash (the SDK expects no trailing slash)
+            if endpoint.endswith('/'):
+                endpoint = endpoint[:-1]
                 
             self.index_client = SearchIndexClient(
                 endpoint=endpoint,
                 credential=self.search_credential
-            )
-            
-            # Initialize Azure OpenAI client
-            self.openai_client = AzureOpenAI(
-                api_key=os.getenv("AZURE_OPENAI_KEY"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-                api_version="2024-02-15-preview"
             )
             
             # Create index if it doesn't exist
@@ -65,7 +68,9 @@ class VectorRAGApplication:
                 else:
                     raise
 
-            # Create the raw index definition
+            # Updated index definition:
+            # - Change "vectorSearchConfiguration" to "vectorSearchProfile" for the vector field.
+            # - The vector field remains defined as a collection of Edm.Single with dimensions.
             index_definition = {
                 "name": index_name,
                 "fields": [
@@ -91,7 +96,7 @@ class VectorRAGApplication:
                         "type": "Collection(Edm.Single)",
                         "searchable": True,
                         "dimensions": 1536,
-                        "vectorSearchConfiguration": "default"
+                        "vectorSearchProfile": "default"  # updated property name
                     }
                 ],
                 "vectorSearch": {
@@ -148,22 +153,23 @@ class VectorRAGApplication:
             logging.error(f"Error indexing documents: {e}")
 
     def search_documents(self, query: str, top: int = 3) -> List[dict]:
-        """Search for relevant documents using hybrid search"""
+        """Search for relevant documents using hybrid search that includes vector similarity"""
         try:
-            # Get query embedding
+            # Get query embedding using the updated method
             query_vector = self.get_embeddings(query)
             logging.info(f"Query vector: {query_vector[:5]}...")
 
             # Perform hybrid search (combines vector and keyword search)
+            # Updated: use the "vector" parameter (a dictionary) instead of "vector_queries".
             results = self.search_client.search(
                 search_text=query,
                 select=["content", "file_name"],
-                vector_queries=[{
-                    "vector": query_vector,
+                vector={
+                    "value": query_vector,
                     "fields": "content_vector",
                     "k": top,
-                    "kind": "hnsw"  # Add the kind parameter here
-                }],
+                    "similarityFunction": "cosine"  # explicit similarity function
+                },
                 top=top
             )
             return [dict(result) for result in results]
@@ -183,31 +189,33 @@ class VectorRAGApplication:
             return set()
 
     def get_embeddings(self, text: str) -> List[float]:
-        """Get embeddings for a given text using Azure OpenAI"""
-        response = self.openai_client.embeddings.create(
-            input=[text],
-            model=os.getenv("AZURE_OPENAI_EMB_DEPLOYMENT")
+        """Get embeddings for a given text using Azure OpenAI via the OpenAI Python SDK"""
+        # Updated: use openai.Embedding.create with engine parameter (deployment name) 
+        response = openai.Embedding.create(
+            engine=AZURE_OPENAI_EMB_DEPLOYMENT,
+            input=[text]
         )
-        return response.data[0].embedding
+        return response['data'][0]['embedding']
 
     def generate_response(self, query: str, documents: List[dict]) -> str:
         """Generate a response based on the query and retrieved documents"""
         context = "\n".join([doc["content"] for doc in documents])
-        response = self.openai_client.chat_completions(
-            deployment_id=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+        response = openai.ChatCompletion.create(
+            engine=AZURE_OPENAI_DEPLOYMENT,
             messages=[
                 {"role": "system", "content": "You are an AI assistant."},
                 {"role": "user", "content": query},
                 {"role": "assistant", "content": context}
             ]
         )
-        return response.choices[0].message.content
+        # The updated v1 API returns message content in a dictionary
+        return response['choices'][0]['message']['content']
 
 def main():
     # Initialize RAG application
     rag_app = VectorRAGApplication()
 
-    # Get existing documents
+    # Get existing documents to avoid re-indexing
     existing_documents = rag_app.get_existing_documents()
     
     # Load and index documents
