@@ -185,7 +185,7 @@ class VectorRAGApplication:
             )
             results = self.search_client.search(
                 search_text=query,
-                select=["content", "file_name", "content_vector"],
+                select=["content", "file_name"],
                 vector_queries=[vector_query],
                 top=top
             )
