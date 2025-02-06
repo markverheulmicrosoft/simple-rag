@@ -7,6 +7,7 @@ from azure.core.credentials import AzureKeyCredential
 from openai import AzureOpenAI
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.exceptions import HttpResponseError
+import openai
 
 # Load environment variables
 load_dotenv()
@@ -48,14 +49,6 @@ class VectorRAGApplication:
             print(f"Error during initialization: {str(e)}")
             raise
 
-    def get_embeddings(self, text: str) -> List[float]:
-        """Generate embeddings using Azure OpenAI"""
-        response = self.openai_client.embeddings.create(
-            model=os.getenv("AZURE_OPENAI_EMB_DEPLOYMENT"),
-            input=text
-        )
-        return response.data[0].embedding
-
     def create_search_index(self):
         """Create search index with vector search capability"""
         try:
@@ -66,8 +59,11 @@ class VectorRAGApplication:
                 existing_index = self.index_client.get_index(index_name)
                 print(f"Index {index_name} already exists")
                 return
-            except Exception:
-                print(f"Creating new index {index_name}")
+            except HttpResponseError as e:
+                if e.status_code == 404:
+                    print(f"Creating new index {index_name}")
+                else:
+                    raise
 
             # Create the raw index definition
             index_definition = {
@@ -115,7 +111,7 @@ class VectorRAGApplication:
             }
 
             # Create the index using the raw definition
-            self.index_client._client.indexes.create(index_definition)
+            self.index_client.create_index(index_definition)
             print(f"Created index {index_name} with vector search")
         except HttpResponseError as e:
             if e.status_code == 403:
@@ -175,24 +171,6 @@ class VectorRAGApplication:
             logging.error(f"Error searching documents: {e}")
             return []
 
-    def generate_response(self, query: str, context: List[dict]) -> str:
-        """Generate response using Azure OpenAI"""
-        context_text = "\n".join([doc["content"] for doc in context])
-        
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant. Use the provided context to answer questions."},
-            {"role": "user", "content": f"Context:\n{context_text}\n\nQuestion: {query}"}
-        ]
-
-        response = self.openai_client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
-            messages=messages,
-            temperature=0.7,
-            max_tokens=500
-        )
-
-        return response.choices[0].message.content
-
     def get_existing_documents(self) -> set:
         """Get a set of file names that have already been indexed"""
         try:
@@ -203,6 +181,27 @@ class VectorRAGApplication:
         except Exception as e:
             logging.error(f"Error retrieving existing documents: {e}")
             return set()
+
+    def get_embeddings(self, text: str) -> List[float]:
+        """Get embeddings for a given text using Azure OpenAI"""
+        response = self.openai_client.embeddings.create(
+            input=[text],
+            model=os.getenv("AZURE_OPENAI_EMB_DEPLOYMENT")
+        )
+        return response.data[0].embedding
+
+    def generate_response(self, query: str, documents: List[dict]) -> str:
+        """Generate a response based on the query and retrieved documents"""
+        context = "\n".join([doc["content"] for doc in documents])
+        response = self.openai_client.chat_completions(
+            deployment_id=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+            messages=[
+                {"role": "system", "content": "You are an AI assistant."},
+                {"role": "user", "content": query},
+                {"role": "assistant", "content": context}
+            ]
+        )
+        return response.choices[0].message.content
 
 def main():
     # Initialize RAG application
@@ -230,16 +229,11 @@ def main():
     else:
         logging.info("No new documents to index")
 
-    # Example queries to demonstrate semantic search
-    queries = [
-        # Semantic similarity without exact keyword matches
-        "What are the risks to ocean life from pollution?",  # Should match ocean acidification content
-        "How is the space industry becoming more accessible?",  # Should match SpaceX content
-        "What's new in AI and computing?",  # Should match both AI and quantum computing content
-    ]
-
-    for query in queries:
-        print(f"\nQuery: {query}")
+    # Prompt user for queries
+    while True:
+        query = input("\nEnter your query (or type 'exit' to quit): ")
+        if query.lower() == 'exit':
+            break
         print("-" * 50)
         results = rag_app.search_documents(query)
         response = rag_app.generate_response(query, results)
