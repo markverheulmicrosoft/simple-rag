@@ -1,5 +1,6 @@
 import os
 import logging
+import base64  # added for encoding keys
 from typing import List
 from dotenv import load_dotenv
 from azure.search.documents import SearchClient
@@ -136,7 +137,7 @@ class VectorRAGApplication:
 
     def load_document(self, file_path: str) -> List[dict]:
         """Load and chunk a document into sections with embeddings.
-           Each chunk gets a unique ID using the file name and paragraph index.
+           Each chunk gets a unique key that is URL-safe Base64 encoded.
         """
         chunks = []
         with open(file_path, 'r', encoding='utf-8') as file:
@@ -147,8 +148,11 @@ class VectorRAGApplication:
                     content = para.strip()
                     embedding = self.get_embeddings(content)
                     logging.info(f"Vectorizing content from {file_path}: {content[:100]}... -> {embedding[:5]}...")
+                    # Generate a raw key and then encode it to be URL-safe
+                    raw_key = f"{os.path.basename(file_path)}_{i}"
+                    encoded_key = base64.urlsafe_b64encode(raw_key.encode("utf-8")).decode("ascii")
                     chunks.append({
-                        "id": f"{os.path.basename(file_path)}_{i}",  # composite key to ensure uniqueness
+                        "id": encoded_key,
                         "content": content,
                         "file_name": os.path.basename(file_path),
                         "content_vector": embedding
@@ -178,6 +182,7 @@ class VectorRAGApplication:
                     "vector": query_vector,
                     "fields": "content_vector",
                     "k": top,
+                    "kind": "hnsw",
                     "similarityFunction": "cosine"
                 }],
                 top=top
