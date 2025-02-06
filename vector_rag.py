@@ -54,7 +54,7 @@ class VectorRAGApplication:
     def create_search_index(self):
         """Create search index with vector search capability"""
         try:
-            index_name = os.getenv("AZURE_SEARCH_INDEX_NAME")
+            index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR")
             
             # Check if index exists
             try:

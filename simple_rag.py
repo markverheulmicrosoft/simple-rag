@@ -41,7 +41,7 @@ class SimpleRAGApplication:
             
             self.search_client = SearchClient(
                 endpoint=endpoint,
-                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME"),
+                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME_SIMPLE"),
                 credential=self.search_credential
             )
         except Exception as e:
