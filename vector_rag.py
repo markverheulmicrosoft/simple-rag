@@ -165,7 +165,8 @@ class VectorRAGApplication:
                 vector_queries=[{
                     "vector": query_vector,
                     "fields": "content_vector",
-                    "k": top
+                    "k": top,
+                    "kind": "hnsw"  # Add the kind parameter here
                 }],
                 top=top
             )
