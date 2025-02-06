@@ -6,6 +6,7 @@ from azure.core.credentials import AzureKeyCredential
 from openai import AzureOpenAI
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.exceptions import HttpResponseError
+from azure.identity import DefaultAzureCredential
 
 # Load environment variables
 load_dotenv()
@@ -14,7 +15,8 @@ class VectorRAGApplication:
     def __init__(self):
         try:
             # Initialize Azure Search clients
-            self.search_credential = AzureKeyCredential(os.getenv("AZURE_SEARCH_ADMIN_KEY"))
+            self.search_credential = DefaultAzureCredential()
+            print(f"Using credential: {self.search_credential}")
             
             endpoint = os.getenv("AZURE_SEARCH_SERVICE_ENDPOINT")
             if not endpoint.endswith('/'):
@@ -24,6 +26,7 @@ class VectorRAGApplication:
                 endpoint=endpoint,
                 credential=self.search_credential
             )
+            print(f"Using endpoint: {os.getenv('AZURE_SEARCH_SERVICE_ENDPOINT')}")
             
             # Initialize Azure OpenAI client
             self.openai_client = AzureOpenAI(
@@ -56,14 +59,18 @@ class VectorRAGApplication:
         """Create search index with vector search capability"""
         try:
             index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR")
+            print(f"Using index name: {index_name}")
             
             # Check if index exists
             try:
                 existing_index = self.index_client.get_index(index_name)
                 print(f"Index {index_name} already exists")
                 return
-            except Exception:
-                print(f"Creating new index {index_name}")
+            except HttpResponseError as e:
+                if e.status_code == 404:
+                    print(f"Creating new index {index_name}")
+                else:
+                    raise
 
             # Create the raw index definition
             index_definition = {
@@ -111,7 +118,7 @@ class VectorRAGApplication:
             }
 
             # Create the index using the raw definition
-            self.index_client._client.indexes.create(index_definition)
+            self.index_client.create_index(index_definition)
             print(f"Created index {index_name} with vector search")
         except HttpResponseError as e:
             if e.status_code == 403:
