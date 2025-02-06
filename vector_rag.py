@@ -39,7 +39,7 @@ class VectorRAGApplication:
             
             self.search_client = SearchClient(
                 endpoint=endpoint,
-                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME_SIMPLE"),
+                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR"),
                 credential=self.search_credential
             )
             
@@ -56,7 +56,7 @@ class VectorRAGApplication:
     def create_search_index(self):
         """Create search index with vector search capability"""
         try:
-            index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_SIMPLE")
+            index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR")
             
             # Check if index exists
             try:
@@ -136,12 +136,13 @@ class VectorRAGApplication:
                     embedding = self.get_embeddings(content)
                     logging.info(f"Vectorizing content from {file_path}: {content[:100]}... -> {embedding[:5]}...")
                     chunks.append({
-                        "id": str(i),
+                        "id": f"{os.path.basename(file_path)}_{i}",  # Composite unique ID
                         "content": content,
                         "file_name": os.path.basename(file_path),
                         "content_vector": embedding
                     })
         return chunks
+
 
     def index_documents(self, documents: List[dict]):
         """Index documents in Azure Search"""
