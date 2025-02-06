@@ -1,7 +1,0 @@
-This is a sample document about artificial intelligence.
-
-AI is transforming the way we live and work. It has applications in various fields including healthcare, finance, and education.
-
-Machine learning, a subset of AI, enables computers to learn from data without being explicitly programmed.
-
-Natural Language Processing (NLP) is another important area of AI that focuses on the interaction between computers and human language. 

@@ -5,6 +5,7 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 from openai import AzureOpenAI
 from azure.search.documents.indexes import SearchIndexClient
+from azure.core.exceptions import HttpResponseError
 
 # Load environment variables
 load_dotenv()
@@ -112,8 +113,11 @@ class VectorRAGApplication:
             # Create the index using the raw definition
             self.index_client._client.indexes.create(index_definition)
             print(f"Created index {index_name} with vector search")
-        except Exception as e:
-            print(f"Error creating index: {str(e)}")
+        except HttpResponseError as e:
+            if e.status_code == 403:
+                print("Error creating index: Forbidden. Please check your credentials and permissions.")
+            else:
+                print(f"Error creating index: {e}")
             raise
 
     def load_document(self, file_path: str) -> List[dict]:
@@ -212,4 +216,4 @@ def main():
         print("Response:", response)
 
 if __name__ == "__main__":
-    main() 
+    main()
