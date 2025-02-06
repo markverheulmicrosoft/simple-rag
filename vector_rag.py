@@ -6,7 +6,7 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents.indexes import SearchIndexClient
 from azure.core.exceptions import HttpResponseError
-from openai import AzureOpenAI  # new client-based import
+from openai import AzureOpenAI  # new client-based interface
 
 # Load environment variables
 load_dotenv()
@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 # Deployment names from environment variables
 AZURE_OPENAI_EMB_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMB_DEPLOYMENT")  # e.g. "text-embedding-ada-002"
-AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")  # e.g. "gpt-35-turbo"
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")            # e.g. "gpt-35-turbo"
 
 class VectorRAGApplication:
     def __init__(self):
@@ -43,11 +43,11 @@ class VectorRAGApplication:
                 credential=self.search_credential
             )
             
-            # Instantiate the AzureOpenAI client (new client-based interface)
+            # Instantiate the AzureOpenAI client using the new client-based interface
             self.ai_client = AzureOpenAI(
                 azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                api_version="2024-02-01"  # Adjust if needed
+                api_version="2024-02-01"  # Adjust as needed
             )
         except Exception as e:
             print(f"Error during initialization: {str(e)}")
@@ -158,16 +158,16 @@ class VectorRAGApplication:
             query_vector = self.get_embeddings(query)
             logging.info(f"Query vector: {query_vector[:5]}...")
 
-            # Perform hybrid search using the updated vector parameter
+            # Perform hybrid search using the correct parameter "vector_queries"
             results = self.search_client.search(
                 search_text=query,
                 select=["content", "file_name"],
-                vector={
-                    "value": query_vector,
+                vector_queries=[{
+                    "vector": query_vector,
                     "fields": "content_vector",
                     "k": top,
                     "similarityFunction": "cosine"
-                },
+                }],
                 top=top
             )
             return [dict(result) for result in results]
@@ -192,7 +192,6 @@ class VectorRAGApplication:
             input=[text],
             model=AZURE_OPENAI_EMB_DEPLOYMENT
         )
-        # Access embedding from the Pydantic response object
         return response.data[0].embedding
 
     def generate_response(self, query: str, documents: List[dict]) -> str:
@@ -206,7 +205,6 @@ class VectorRAGApplication:
                 {"role": "assistant", "content": context}
             ]
         )
-        # Access message content via dot notation
         return response.choices[0].message.content
 
 def main():
@@ -219,7 +217,6 @@ def main():
     # Load and index documents
     documents = []
     data_folder = "Data"
-    # Get all .txt files from the Data folder
     data_files = [os.path.join(data_folder, f) for f in os.listdir(data_folder) if f.endswith('.txt')]
     print(f"Found {len(data_files)} documents to process: {[os.path.basename(f) for f in data_files]}")
     
