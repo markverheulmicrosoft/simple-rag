@@ -1,6 +1,6 @@
 import os
 import logging
-import base64  # added for encoding keys
+import base64  # for encoding keys
 from typing import List
 from dotenv import load_dotenv
 from azure.search.documents import SearchClient
@@ -9,7 +9,8 @@ from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 from openai import AzureOpenAI
 
-# Additional imports for building the index with vector fields and profiles
+# Additional imports for building the index with vector fields and profiles,
+# and for constructing a vector query.
 from azure.search.documents.indexes.models import (
     SearchIndex,
     SimpleField,
@@ -21,6 +22,7 @@ from azure.search.documents.indexes.models import (
     HnswParameters,
     VectorSearchProfile
 )
+from azure.search.documents.models import VectorizedQuery  # Use this to build your query
 
 # Load environment variables
 load_dotenv()
@@ -96,7 +98,7 @@ class VectorRAGApplication:
                 )
             ]
             
-            # Define the vector search configuration with both an algorithm configuration and a profile.
+            # Define the vector search configuration with an algorithm configuration and a profile.
             vector_search_config = VectorSearch(
                 algorithms=[
                     HnswAlgorithmConfiguration(
@@ -169,22 +171,22 @@ class VectorRAGApplication:
 
     def search_documents(self, query: str, top: int = 3) -> List[dict]:
         """Search for relevant documents using hybrid search that includes vector similarity.
-           Uses the 'vector_queries' parameter.
+           Uses the VectorizedQuery object to set the query parameters.
         """
         try:
             query_vector = self.get_embeddings(query)
             logging.info(f"Query vector: {query_vector[:5]}...")
             
+            # Use VectorizedQuery from the SDK instead of a dict
+            vector_query = VectorizedQuery(
+                vector=query_vector,
+                k_nearest_neighbors=top,
+                fields="content_vector"
+            )
             results = self.search_client.search(
                 search_text=query,
                 select=["content", "file_name"],
-                vector_queries=[{
-                    "vector": query_vector,
-                    "fields": "content_vector",
-                    "k": top,
-                    "kind": "hnsw",
-                    "similarityFunction": "cosine"
-                }],
+                vector_queries=[vector_query],
                 top=top
             )
             return [dict(result) for result in results]
