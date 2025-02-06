@@ -214,17 +214,23 @@ class VectorRAGApplication:
         return response.data[0].embedding
 
     def generate_response(self, query: str, documents: List[dict]) -> str:
-        """Generate a response based on the query and retrieved documents using the AzureOpenAI client."""
+        # Create a system prompt that instructs the model to use only the context
+        system_prompt = (
+            "You are an assistent helping to give as much information about funds based solely on the provided document context. "
+            "If the context does not contain the answer, say 'No relevant data found. '"
+            ""
+        )
         context = "\n".join([doc["content"] for doc in documents])
         response = self.ai_client.chat.completions.create(
             model=AZURE_OPENAI_DEPLOYMENT,
             messages=[
-                {"role": "system", "content": "You are an AI assistant."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": query},
                 {"role": "assistant", "content": context}
             ]
         )
         return response.choices[0].message.content
+
 
 def main():
     # Initialize the application
