@@ -8,6 +8,7 @@ from azure.search.documents.indexes import SearchIndexClient
 from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 from openai import AzureOpenAI
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # Additional imports for building the index with vector fields and profiles
 from azure.search.documents.indexes.models import (
@@ -40,20 +41,18 @@ class VectorRAGApplication:
             self.search_credential = AzureKeyCredential(os.getenv("AZURE_SEARCH_ADMIN_KEY"))
             endpoint = os.getenv("AZURE_SEARCH_SERVICE_ENDPOINT")
             # Ensure endpoint does not end with a slash
-            if endpoint.endswith('/'):
-                endpoint = endpoint[:-1]
-                
+
             self.index_client = SearchIndexClient(
                 endpoint=endpoint,
                 credential=self.search_credential
             )
             
             # Create index if it doesn't exist using the new SearchIndex object
-            self.create_search_index()
+            index_name=os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR")
+            self.create_search_index(index_name)
             
             self.search_client = SearchClient(
                 endpoint=endpoint,
-                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR"),
                 credential=self.search_credential
             )
             
@@ -67,13 +66,12 @@ class VectorRAGApplication:
             print(f"Error during initialization: {str(e)}")
             raise
 
-    def create_search_index(self):
+    def create_search_index(self, index_name):
         """Create search index with vector search capability using a SearchIndex model"""
         try:
-            index_name = os.getenv("AZURE_SEARCH_INDEX_NAME_VECTOR")
             # Check if the index already exists
             try:
-                existing_index = self.index_client.get_index(index_name)
+                self.index_client.get_index(index_name)
                 print(f"Index {index_name} already exists")
                 return
             except HttpResponseError as e:
@@ -138,27 +136,30 @@ class VectorRAGApplication:
             raise
 
     def load_document(self, file_path: str) -> List[dict]:
-        """Load and chunk a document into sections with embeddings.
-           Each chunk gets a unique key that is URL-safe Base64 encoded.
-        """
+        """Load and chunk a document using a recursive character text splitter."""
         chunks = []
+        # Create a splitter with a chunk size of 1000 characters and an overlap of 200 characters.
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        
         with open(file_path, 'r', encoding='utf-8') as file:
             text = file.read()
-            paragraphs = text.split('\n\n')
-            for i, para in enumerate(paragraphs):
-                if para.strip():
-                    content = para.strip()
-                    embedding = self.get_embeddings(content)
-                    logging.info(f"Vectorizing content from {file_path}: {content[:100]}... -> {embedding[:5]}...")
-                    # Generate a raw key and then encode it to be URL-safe
-                    raw_key = f"{os.path.basename(file_path)}_{i}"
-                    encoded_key = base64.urlsafe_b64encode(raw_key.encode("utf-8")).decode("ascii")
-                    chunks.append({
-                        "id": encoded_key,
-                        "content": content,
-                        "file_name": os.path.basename(file_path),
-                        "content_vector": embedding
-                    })
+        
+        # Use the splitter to get a list of text chunks.
+        chunk_texts = splitter.split_text(text)
+        
+        for i, chunk in enumerate(chunk_texts):
+            if chunk.strip():
+                embedding = self.get_embeddings(chunk)
+                logging.info(f"Vectorizing content from {file_path}: {chunk[:100]}... -> {embedding[:5]}...")
+                # Generate a raw key and then encode it to be URL-safe
+                raw_key = f"{os.path.basename(file_path)}_{i}"
+                encoded_key = base64.urlsafe_b64encode(raw_key.encode("utf-8")).decode("ascii")
+                chunks.append({
+                    "id": encoded_key,
+                    "content": chunk,
+                    "file_name": os.path.basename(file_path),
+                    "content_vector": embedding
+                })
         return chunks
 
     def index_documents(self, documents: List[dict]):
@@ -217,7 +218,7 @@ class VectorRAGApplication:
         # Create a system prompt that instructs the model to use only the context
         system_prompt = (
             "You are an assistent helping to give as much information about funds based solely on the provided document context. "
-            "If the context does not contain the answer, say 'No relevant data found. '"
+            "If the context does not contain the answer or you are not able to answer, please elaborate why you can't answer."
             ""
         )
         context = "\n".join([doc["content"] for doc in documents])
